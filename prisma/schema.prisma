@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Job {
+  id              String        @id @default(cuid())
+  externalId      String        @unique
+  title           String
+  company         String
+  location        String
+  salary          String?
+  salaryMin       Float?
+  salaryMax       Float?
+  description     String
+  summary         String?
+  url             String
+  source          String        @default("indeed")
+  postedDate      DateTime?
+  scrapedAt       DateTime      @default(now())
+  applicantCount  String?
+  jobType         String?
+  remote          Boolean       @default(false)
+  confidenceScore Float?
+  skills          String?
+  isNew           Boolean       @default(true)
+  isHidden        Boolean       @default(false)
+  application     Application?
+  coverLetters    CoverLetter[]
+  notes           Note[]
+
+  @@index([company])
+  @@index([postedDate])
+  @@index([confidenceScore])
+  @@index([isNew])
+}
+
+model Application {
+  id           String    @id @default(cuid())
+  jobId        String    @unique
+  job          Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  status       String    @default("interested")
+  appliedDate  DateTime?
+  notes        String?
+  resumeUsed   String?
+  followUpDate DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([status])
+}
+
+model CoverLetter {
+  id        String   @id @default(cuid())
+  jobId     String
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  content   String
+  tone      String   @default("professional")
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+
+  @@index([jobId])
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  jobId     String
+  job       Job      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([jobId])
+}
+
+model ScrapeLog {
+  id          String    @id @default(cuid())
+  query       String
+  location    String
+  jobsFound   Int       @default(0)
+  newJobs     Int       @default(0)
+  duplicates  Int       @default(0)
+  errors      String?
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+}
+
+model UserProfile {
+  id         String   @id @default(cuid())
+  name       String
+  email      String
+  phone      String?
+  skills     String
+  experience String
+  education  String?
+  resumeText String?
+  preferences String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model SearchConfig {
+  id        String   @id @default(cuid())
+  query     String
+  location  String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
