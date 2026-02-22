@@ -33,9 +33,12 @@ export default function ProfileModal({ isOpen, onClose }: ProfileModalProps) {
   useEffect(() => {
     if (isOpen) {
       fetch("/api/profile")
-        .then((r) => r.json())
+        .then((r) => {
+          if (!r.ok) throw new Error("Profile API error");
+          return r.json();
+        })
         .then((data) => {
-          if (data) setProfile(data);
+          if (data && data.name) setProfile(data);
         })
         .catch(console.error);
     }

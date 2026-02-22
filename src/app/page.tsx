@@ -65,10 +65,16 @@ export default function Home() {
     try {
       const res = await fetch(`/api/jobs?${params.toString()}`);
       const data = await res.json();
+      if (!res.ok || !data.jobs) {
+        console.error("Jobs API error:", data.error || data);
+        setJobs([]);
+        return;
+      }
       setJobs(data.jobs);
       setPagination(data.pagination);
     } catch (error) {
       console.error("Failed to fetch jobs:", error);
+      setJobs([]);
     }
     setIsLoading(false);
   }, [pagination.page, search, activeFilter, sortBy, sortOrder, refreshKey]);
@@ -279,7 +285,10 @@ export default function Home() {
                   setRefreshKey((k) => k + 1);
                   // Re-fetch the selected job
                   fetch(`/api/jobs/${selectedJob.id}`)
-                    .then((r) => r.json())
+                    .then((r) => {
+                      if (!r.ok) throw new Error("Failed to fetch job");
+                      return r.json();
+                    })
                     .then(setSelectedJob)
                     .catch(console.error);
                 }}

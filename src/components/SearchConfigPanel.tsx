@@ -26,8 +26,14 @@ export default function SearchConfigPanel({ isOpen, onClose }: SearchConfigPanel
   }, [isOpen]);
 
   async function loadConfigs() {
-    const res = await fetch("/api/search-config");
-    setConfigs(await res.json());
+    try {
+      const res = await fetch("/api/search-config");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Array.isArray(data)) setConfigs(data);
+    } catch (error) {
+      console.error("Failed to load configs:", error);
+    }
   }
 
   async function addConfig() {

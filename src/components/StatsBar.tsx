@@ -28,8 +28,15 @@ export default function StatsBar() {
 
   useEffect(() => {
     fetch("/api/stats")
-      .then((r) => r.json())
-      .then(setStats)
+      .then((r) => {
+        if (!r.ok) throw new Error("Stats API error");
+        return r.json();
+      })
+      .then((data) => {
+        if (data && typeof data.totalJobs === "number") {
+          setStats(data);
+        }
+      })
       .catch(console.error);
   }, []);
 
