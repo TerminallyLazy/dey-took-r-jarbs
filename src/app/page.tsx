@@ -3,11 +3,10 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Crosshair,
-  User,
   Settings,
-  Github,
   RefreshCw,
 } from "lucide-react";
+import { UserButton } from "@clerk/nextjs";
 import StatsBar from "@/components/StatsBar";
 import SearchBar from "@/components/SearchBar";
 import FilterBar from "@/components/FilterBar";
@@ -160,13 +159,14 @@ export default function Home() {
               >
                 <Settings className="w-4 h-4" />
               </button>
-              <button
-                onClick={() => setShowProfile(true)}
-                className="p-2 rounded-lg hover:bg-surface-hover text-muted hover:text-white transition-colors"
-                title="Your profile"
-              >
-                <User className="w-4 h-4" />
-              </button>
+              <UserButton
+                afterSignOutUrl="/sign-in"
+                appearance={{
+                  elements: {
+                    avatarBox: "w-8 h-8",
+                  },
+                }}
+              />
             </div>
           </div>
         </div>
