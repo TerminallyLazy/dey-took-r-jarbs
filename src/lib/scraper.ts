@@ -1,182 +1,136 @@
 import axios from "axios";
-import * as cheerio from "cheerio";
 import { prisma } from "./prisma";
 import type { ScrapedJob, ScrapeResult } from "@/types";
-import { parseSalary } from "./utils";
 
-const USER_AGENTS = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-];
+const JSEARCH_BASE_URL = "https://jsearch.p.rapidapi.com/search";
 
-function getRandomUA(): string {
-  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+interface JSearchJob {
+  job_id: string;
+  job_title: string;
+  employer_name: string;
+  employer_logo: string | null;
+  employer_website: string | null;
+  job_employment_type: string | null;
+  job_apply_link: string;
+  job_description: string;
+  job_is_remote: boolean;
+  job_posted_at_datetime_utc: string | null;
+  job_city: string | null;
+  job_state: string | null;
+  job_country: string | null;
+  job_min_salary: number | null;
+  job_max_salary: number | null;
+  job_salary_currency: string | null;
+  job_salary_period: string | null;
+  job_required_skills: string[] | null;
+  job_highlights: {
+    Qualifications?: string[];
+    Responsibilities?: string[];
+    Benefits?: string[];
+  } | null;
+  job_google_link: string | null;
 }
 
-function buildIndeedUrl(query: string, location: string, start: number = 0): string {
-  const params = new URLSearchParams({
-    q: query,
-    l: location,
-    sort: "date",
-    start: start.toString(),
-    fromage: "1", // Last 24 hours
-  });
-  return `https://www.indeed.com/jobs?${params.toString()}`;
+interface JSearchResponse {
+  status: string;
+  data: JSearchJob[];
 }
 
-async function fetchPage(url: string): Promise<string> {
-  const response = await axios.get(url, {
-    headers: {
-      "User-Agent": getRandomUA(),
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-US,en;q=0.5",
-      "Accept-Encoding": "gzip, deflate",
-      Connection: "keep-alive",
-      "Upgrade-Insecure-Requests": "1",
-    },
-    timeout: 15000,
-  });
-  return response.data;
-}
-
-function parseIndeedListings(html: string): ScrapedJob[] {
-  const $ = cheerio.load(html);
-  const jobs: ScrapedJob[] = [];
-
-  // Indeed embeds job data in script tags as JSON
-  $("script").each((_i, el) => {
-    const text = $(el).html() || "";
-    if (text.includes("mosaic-provider-jobcards")) {
-      try {
-        const match = text.match(/window\.mosaic\.providerData\["mosaic-provider-jobcards"\]\s*=\s*({[\s\S]+?});/);
-        if (match) {
-          const data = JSON.parse(match[1]);
-          const results = data?.metaData?.mosaicProviderJobCardsModel?.results || [];
-          for (const job of results) {
-            jobs.push(parseJobFromData(job));
-          }
-        }
-      } catch {
-        // Fall through to HTML parsing
-      }
-    }
-  });
-
-  // Fallback: parse HTML cards directly
-  if (jobs.length === 0) {
-    $(".job_seen_beacon, .jobsearch-ResultsList > li, .resultContent, [data-jk]").each((_i, el) => {
-      const $el = $(el);
-      const jk = $el.attr("data-jk") || $el.find("[data-jk]").attr("data-jk") || "";
-      if (!jk) return;
-
-      const title = $el.find(".jobTitle span, h2.jobTitle a span").first().text().trim();
-      const company = $el.find("[data-testid='company-name'], .companyName, .company").first().text().trim();
-      const location = $el.find("[data-testid='text-location'], .companyLocation, .location").first().text().trim();
-      const salary = $el.find(".salary-snippet-container, .salaryText, [data-testid='attribute_snippet_testid']").first().text().trim();
-      const snippet = $el.find(".job-snippet, .jobCardShelfContainer, .underShelfFooter").first().text().trim();
-      const metadata = $el.find(".metadata, .jobMetaDataGroup").text().trim();
-
-      if (title && company) {
-        const salaryParsed = salary ? parseSalary(salary) : {};
-        jobs.push({
-          externalId: `indeed_${jk}`,
-          title,
-          company,
-          location,
-          salary: salary || undefined,
-          salaryMin: salaryParsed.min,
-          salaryMax: salaryParsed.max,
-          description: snippet || metadata || "No description available",
-          url: `https://www.indeed.com/viewjob?jk=${jk}`,
-          source: "indeed",
-          postedDate: extractPostedDate($el.find(".date, .myJobsState").text()),
-          applicantCount: extractApplicantCount($el.text()),
-          jobType: extractJobType($el.text()),
-          remote: /remote|work from home|wfh/i.test(location + " " + title),
-          skills: [],
-        });
-      }
-    });
+function getApiKey(): string {
+  const key = process.env.RAPIDAPI_KEY;
+  if (!key) {
+    throw new Error("RAPIDAPI_KEY environment variable is not set. Get a free key at https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch");
   }
-
-  return jobs;
+  return key;
 }
 
-function parseJobFromData(job: Record<string, unknown>): ScrapedJob {
-  const salary = (job.formattedSalary as string) || (job.extractedSalary as Record<string, unknown>)?.max
-    ? `$${(job.extractedSalary as Record<string, unknown>)?.min || ""}–$${(job.extractedSalary as Record<string, unknown>)?.max || ""}`
-    : undefined;
+function buildLocation(city: string, state: string | null, country: string | null): string {
+  const parts = [city, state, country].filter(Boolean);
+  return parts.join(", ");
+}
 
-  const salaryParsed = salary ? parseSalary(salary) : {};
-  const locationStr = (job.formattedLocation as string) || (job.jobLocationCity as string) || "";
+function formatSalaryString(job: JSearchJob): string | undefined {
+  if (!job.job_min_salary && !job.job_max_salary) return undefined;
+  const period = job.job_salary_period?.toLowerCase() || "year";
+  const currency = job.job_salary_currency || "USD";
+  const symbol = currency === "USD" ? "$" : currency;
+
+  if (job.job_min_salary && job.job_max_salary) {
+    return `${symbol}${job.job_min_salary.toLocaleString()} - ${symbol}${job.job_max_salary.toLocaleString()} per ${period}`;
+  }
+  if (job.job_min_salary) {
+    return `${symbol}${job.job_min_salary.toLocaleString()}+ per ${period}`;
+  }
+  return `Up to ${symbol}${job.job_max_salary!.toLocaleString()} per ${period}`;
+}
+
+function normalizeToYearly(amount: number | null, period: string | null): number | undefined {
+  if (!amount) return undefined;
+  switch (period?.toUpperCase()) {
+    case "HOUR":
+      return amount * 2080;
+    case "MONTH":
+      return amount * 12;
+    case "WEEK":
+      return amount * 52;
+    case "YEAR":
+    default:
+      return amount;
+  }
+}
+
+function mapJSearchJob(job: JSearchJob): ScrapedJob {
+  const location = buildLocation(
+    job.job_city || "",
+    job.job_state,
+    job.job_country
+  );
 
   return {
-    externalId: `indeed_${job.jobkey || job.jk}`,
-    title: (job.title as string) || (job.displayTitle as string) || "",
-    company: (job.company as string) || "",
-    location: locationStr,
-    salary,
-    salaryMin: salaryParsed.min || (job.extractedSalary as Record<string, unknown>)?.min as number | undefined,
-    salaryMax: salaryParsed.max || (job.extractedSalary as Record<string, unknown>)?.max as number | undefined,
-    description: (job.snippet as string) || "",
-    url: `https://www.indeed.com/viewjob?jk=${job.jobkey || job.jk}`,
-    source: "indeed",
-    postedDate: job.formattedRelativeDate ? extractPostedDate(job.formattedRelativeDate as string) : undefined,
-    applicantCount: (job.applicantCount as string) || undefined,
-    jobType: (job.jobTypes as string[])?.join(", ") || undefined,
-    remote: /remote/i.test(locationStr + " " + ((job.title as string) || "")),
-    skills: [],
+    externalId: `jsearch_${job.job_id}`,
+    title: job.job_title,
+    company: job.employer_name,
+    location,
+    salary: formatSalaryString(job),
+    salaryMin: normalizeToYearly(job.job_min_salary, job.job_salary_period),
+    salaryMax: normalizeToYearly(job.job_max_salary, job.job_salary_period),
+    description: job.job_description || "No description available",
+    url: job.job_apply_link || job.job_google_link || "",
+    source: "jsearch",
+    postedDate: job.job_posted_at_datetime_utc
+      ? new Date(job.job_posted_at_datetime_utc)
+      : undefined,
+    applicantCount: undefined,
+    jobType: job.job_employment_type || undefined,
+    remote: job.job_is_remote || false,
+    skills: job.job_required_skills || [],
   };
 }
 
-function extractPostedDate(text: string): Date | undefined {
-  if (!text) return undefined;
-  const now = new Date();
-  const lower = text.toLowerCase();
+async function fetchJSearchPage(
+  query: string,
+  location: string,
+  page: number
+): Promise<JSearchJob[]> {
+  const response = await axios.get<JSearchResponse>(JSEARCH_BASE_URL, {
+    headers: {
+      "X-RapidAPI-Key": getApiKey(),
+      "X-RapidAPI-Host": "jsearch.p.rapidapi.com",
+    },
+    params: {
+      query: `${query} in ${location}`,
+      page: (page + 1).toString(), // JSearch uses 1-based pages
+      num_pages: "1",
+      date_posted: "today",
+    },
+    timeout: 30000,
+  });
 
-  if (lower.includes("just posted") || lower.includes("today")) return now;
-
-  const daysMatch = lower.match(/(\d+)\s*day/);
-  if (daysMatch) {
-    const days = parseInt(daysMatch[1]);
-    return new Date(now.getTime() - days * 86400000);
+  if (response.data.status !== "OK") {
+    throw new Error(`JSearch API returned status: ${response.data.status}`);
   }
 
-  const hoursMatch = lower.match(/(\d+)\s*hour/);
-  if (hoursMatch) {
-    const hours = parseInt(hoursMatch[1]);
-    return new Date(now.getTime() - hours * 3600000);
-  }
-
-  return undefined;
-}
-
-function extractApplicantCount(text: string): string | undefined {
-  const match = text.match(/(\d+\+?\s*applicants?|be\s+(?:an?\s+)?early\s+applicant)/i);
-  return match ? match[0].trim() : undefined;
-}
-
-function extractJobType(text: string): string | undefined {
-  const types = ["Full-time", "Part-time", "Contract", "Temporary", "Internship"];
-  for (const type of types) {
-    if (text.toLowerCase().includes(type.toLowerCase())) return type;
-  }
-  return undefined;
-}
-
-async function fetchJobDetails(url: string): Promise<string> {
-  try {
-    const html = await fetchPage(url);
-    const $ = cheerio.load(html);
-    const description =
-      $("#jobDescriptionText").text().trim() ||
-      $("[id*='jobDescription']").text().trim() ||
-      $(".jobsearch-jobDescriptionText").text().trim();
-    return description || "No detailed description available";
-  } catch {
-    return "Unable to fetch detailed description";
-  }
+  return response.data.data || [];
 }
 
 export async function scrapeIndeedJobs(
@@ -193,17 +147,17 @@ export async function scrapeIndeedJobs(
 
   for (let page = 0; page < pages; page++) {
     try {
-      const url = buildIndeedUrl(query, location, page * 10);
-      const html = await fetchPage(url);
-      const jobs = parseIndeedListings(html);
-      allJobs = allJobs.concat(jobs);
+      const jobs = await fetchJSearchPage(query, location, page);
+      const mapped = jobs.map(mapJSearchJob);
+      allJobs = allJobs.concat(mapped);
 
       // Rate limit between pages
       if (page < pages - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 2000 + Math.random() * 3000));
+        await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
-      errors.push(`Page ${page}: ${error instanceof Error ? error.message : "Unknown error"}`);
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      errors.push(`Page ${page}: ${msg}`);
     }
   }
 
@@ -229,18 +183,6 @@ export async function scrapeIndeedJobs(
         continue;
       }
 
-      // Fetch full description for new jobs
-      let fullDescription = job.description;
-      try {
-        const details = await fetchJobDetails(job.url);
-        if (details && details !== "Unable to fetch detailed description") {
-          fullDescription = details;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1000 + Math.random() * 2000));
-      } catch {
-        // Keep the snippet description
-      }
-
       await prisma.job.create({
         data: {
           externalId: job.externalId,
@@ -250,7 +192,7 @@ export async function scrapeIndeedJobs(
           salary: job.salary,
           salaryMin: job.salaryMin,
           salaryMax: job.salaryMax,
-          description: fullDescription,
+          description: job.description,
           url: job.url,
           source: job.source,
           postedDate: job.postedDate,
